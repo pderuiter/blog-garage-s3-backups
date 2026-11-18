@@ -1,0 +1,35 @@
+# {{ ansible_managed }}
+services:
+  garage:
+    image: {{ garage_image }}
+    container_name: {{ garage_container_name }}
+    restart: unless-stopped
+    volumes:
+      - {{ garage_data_dir }}:/var/lib/garage/data
+      - garage-meta:/var/lib/garage/meta
+      - ./garage.toml:/etc/garage.toml:ro
+      - ./admin_token:/var/lib/garage/admin_token:ro
+{% if garage_publish_ports | length > 0 %}
+    ports:
+{% for port in garage_publish_ports %}
+      - "{{ port }}"
+{% endfor %}
+{% endif %}
+    networks:
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.garage-s3.rule=Host(`{{ garage_host }}`)"
+      - "traefik.http.routers.garage-s3.entrypoints={{ garage_traefik_entrypoint }}"
+      - "traefik.http.routers.garage-s3.tls=true"
+      - "traefik.http.routers.garage-s3.tls.certresolver={{ garage_traefik_certresolver }}"
+      - "traefik.http.routers.garage-s3.service=garage-s3"
+      - "traefik.http.services.garage-s3.loadbalancer.server.port=3900"
+
+volumes:
+  garage-meta:
+
+networks:
+  traefik_network:
+    name: {{ garage_traefik_network }}
+    external: true

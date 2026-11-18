@@ -1,0 +1,54 @@
+---
+- name: Read bucket {{ garage_bucket.name }}
+  ansible.builtin.command: docker exec {{ garage_container_name }} /garage bucket info {{ garage_bucket.name }}
+  register: garage_bucket_info
+  changed_when: false
+  failed_when: false
+
+- name: Create bucket {{ garage_bucket.name }}
+  ansible.builtin.command: docker exec {{ garage_container_name }} /garage bucket create {{ garage_bucket.name }}
+  when: garage_bucket_info.rc != 0
+  changed_when: true
+
+- name: Grant the key read, write and owner on {{ garage_bucket.name }}
+  ansible.builtin.command: >-
+    docker exec {{ garage_container_name }} /garage bucket allow
+    --read --write --owner {{ garage_bucket.name }} --key {{ garage_key_name }}
+  when: ('RWO  ' ~ garage_access_key_id) not in garage_bucket_info.stdout
+  changed_when: true
+
+- name: Set the lifecycle rule on {{ garage_bucket.name }}
+  when: garage_bucket.expire_days | default(0) | int > 0
+  vars:
+    garage_aws_run: >-
+      docker run --rm --network {{ garage_traefik_network }}
+      -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+      {{ garage_aws_cli_image }} --endpoint-url http://{{ garage_container_name }}:3900 --region {{ garage_s3_region }}
+    garage_lifecycle:
+      Rules:
+        - ID: "expire-{{ garage_bucket.expire_days }}d"
+          Status: Enabled
+          Filter:
+            Prefix: ""
+          Expiration:
+            Days: "{{ garage_bucket.expire_days | int }}"
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ garage_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ garage_secret_access_key }}"
+  block:
+    - name: Read the lifecycle configuration of {{ garage_bucket.name }}
+      ansible.builtin.command: >-
+        {{ garage_aws_run }} s3api get-bucket-lifecycle-configuration --bucket {{ garage_bucket.name }}
+      register: garage_lifecycle_current
+      changed_when: false
+      failed_when: false
+
+    - name: Write the lifecycle configuration of {{ garage_bucket.name }}
+      ansible.builtin.command: >-
+        {{ garage_aws_run }} s3api put-bucket-lifecycle-configuration --bucket {{ garage_bucket.name }}
+        --lifecycle-configuration '{{ garage_lifecycle | to_json }}'
+      # Garage v1.x answers a bucket without lifecycle configuration with an empty 204.
+      when: >-
+        garage_lifecycle_current.rc != 0 or garage_lifecycle_current.stdout | length == 0 or
+        ((garage_lifecycle_current.stdout | from_json).Rules | map(attribute='Expiration.Days') | list) != [garage_bucket.expire_days | int]
+      changed_when: true

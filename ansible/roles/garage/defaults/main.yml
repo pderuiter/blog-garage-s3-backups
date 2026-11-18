@@ -1,0 +1,35 @@
+---
+garage_dir: /opt/garage
+garage_image: dxflrs/garage:v1.1.0
+garage_container_name: garage
+# Data on the host filesystem (a dedicated disk or ZFS dataset), metadata in a volume.
+garage_data_dir: /data-pool/backups
+
+# openssl rand -hex 32, both. Keep them in the vault.
+garage_rpc_secret: ""
+garage_admin_token: ""
+
+garage_s3_region: garage
+garage_host: backups.example.com
+garage_s3_root_domain: ".s3.{{ garage_host }}"
+garage_web_root_domain: ".web.{{ garage_host }}"
+
+# Traefik in front (see blog-traefik-letsencrypt-docker). The role creates the
+# external network if it does not exist yet.
+garage_traefik_network: traefik_network
+garage_traefik_entrypoint: websecure
+garage_traefik_certresolver: production
+# Publish ports on the host as well (e.g. ["127.0.0.1:3900:3900"]); empty as in the post.
+garage_publish_ports: []
+
+# Single-node layout.
+garage_layout_zone: dc1
+garage_layout_capacity: 1T
+
+garage_key_name: backup-user
+# [{name, expire_days}]; expire_days 0 = no lifecycle rule.
+garage_buckets: []
+
+# The lifecycle rules are set with the aws CLI (mc ilm fails on Garage v1.x), run
+# from this image on the Traefik network.
+garage_aws_cli_image: amazon/aws-cli:2.41.0

@@ -1,0 +1,65 @@
+---
+# A throw-away PostgreSQL that matches the post's gitlab-backup job
+# (gitlab-postgres.gitlab.svc, user/db gitlab), with 500 rows to back up.
+#   ansible-playbook tests/demo-db.yml
+- name: Demo database for the gitlab-backup job
+  hosts: k8s
+  vars:
+    ansible_python_interpreter: "{{ k3s_python_venv }}/bin/python"
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k3s_kubeconfig }}"
+  tasks:
+    - name: Deploy PostgreSQL in namespace gitlab
+      kubernetes.core.k8s:
+        state: present
+        wait: true
+        definition:
+          - apiVersion: v1
+            kind: Namespace
+            metadata: {name: gitlab}
+          - apiVersion: v1
+            kind: Secret
+            metadata: {name: gitlab-postgres, namespace: gitlab}
+            stringData:
+              POSTGRES_USER: gitlab
+              POSTGRES_DB: gitlab
+              POSTGRES_PASSWORD: "{{ vault_gitlab_db_password }}"
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata: {name: gitlab-postgres, namespace: gitlab}
+            spec:
+              selector: {matchLabels: {app: gitlab-postgres}}
+              template:
+                metadata: {labels: {app: gitlab-postgres}}
+                spec:
+                  containers:
+                    - name: postgres
+                      image: postgres:16.1
+                      envFrom: [{secretRef: {name: gitlab-postgres}}]
+                      readinessProbe:
+                        exec: {command: [pg_isready, -U, gitlab]}
+          - apiVersion: v1
+            kind: Service
+            metadata: {name: gitlab-postgres, namespace: gitlab}
+            spec:
+              selector: {app: gitlab-postgres}
+              ports: [{port: 5432}]
+
+    - name: Find the database pod
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: gitlab
+        label_selectors: [app=gitlab-postgres]
+        wait: true
+        wait_condition: {type: Ready, status: "True"}
+      register: demo_pod
+
+    - name: Seed 500 rows
+      kubernetes.core.k8s_exec:
+        namespace: gitlab
+        pod: "{{ demo_pod.resources[0].metadata.name }}"
+        command: >-
+          psql -U gitlab -d gitlab -c "CREATE TABLE IF NOT EXISTS demo (id int PRIMARY KEY, note text);
+          INSERT INTO demo SELECT g, md5(g::text) FROM generate_series(1,500) g ON CONFLICT DO NOTHING;"
+      register: demo_seed
+      changed_when: "'INSERT 0 0' not in demo_seed.stdout"

@@ -1,0 +1,42 @@
+---
+- name: Create namespace {{ garage_backup_job.namespace | default(garage_backup_job.name) }}
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ garage_backup_job.namespace | default(garage_backup_job.name) }}"
+    state: present
+
+- name: Create the credential Secrets for {{ garage_backup_job.name }}
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      - apiVersion: v1
+        kind: Secret
+        metadata:
+          name: garage-credentials
+          namespace: "{{ garage_backup_job.namespace | default(garage_backup_job.name) }}"
+        type: Opaque
+        stringData:
+          ACCESS_KEY: "{{ garage_backup_access_key_id }}"
+          SECRET_KEY: "{{ garage_backup_secret_access_key }}"
+      - apiVersion: v1
+        kind: Secret
+        metadata:
+          name: "{{ garage_backup_job.name | regex_replace('-backup$', '') }}-db-password"
+          namespace: "{{ garage_backup_job.namespace | default(garage_backup_job.name) }}"
+        type: Opaque
+        stringData:
+          password: "{{ garage_backup_job.db_password }}"
+  when: garage_backup_secret_source == 'kubernetes'
+  no_log: true
+
+- name: Create the ExternalSecrets for {{ garage_backup_job.name }}
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'externalsecrets.yml.j2') | ansible.builtin.from_yaml_all | list }}"
+  when: garage_backup_secret_source == 'external-secrets'
+
+- name: Create CronJob {{ garage_backup_job.name }}
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'cronjob.yml.j2') | ansible.builtin.from_yaml }}"

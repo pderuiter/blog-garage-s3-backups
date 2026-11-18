@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: garage_backup
+  author: Patrick de Ruiter
+  description: PostgreSQL backup CronJobs that upload to Garage with the aws CLI and alert ntfy on failure
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+dependencies: []

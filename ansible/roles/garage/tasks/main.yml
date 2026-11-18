@@ -1,0 +1,63 @@
+---
+- name: Check the secrets
+  ansible.builtin.assert:
+    that:
+      - garage_rpc_secret is match('^[0-9a-f]{64}$')
+      - garage_admin_token | length > 0
+    fail_msg: garage_rpc_secret must be 64 hex characters (openssl rand -hex 32) and garage_admin_token must be set.
+    quiet: true
+
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ garage_dir }}"
+    - "{{ garage_data_dir }}"
+
+- name: Write the admin token (Garage refuses to start if it is world-readable)
+  ansible.builtin.copy:
+    content: "{{ garage_admin_token }}\n"
+    dest: "{{ garage_dir }}/admin_token"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart garage
+
+- name: Write garage.toml
+  ansible.builtin.template:
+    src: garage.toml.j2
+    dest: "{{ garage_dir }}/garage.toml"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart garage
+
+- name: Write docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ garage_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the Traefik network
+  community.docker.docker_network:
+    name: "{{ garage_traefik_network }}"
+    state: present
+
+- name: Start Garage
+  community.docker.docker_compose_v2:
+    project_src: "{{ garage_dir }}"
+    state: present
+
+- name: Apply handler restarts before configuring the cluster
+  ansible.builtin.meta: flush_handlers
+
+- name: Configure the layout, key and buckets
+  ansible.builtin.include_tasks: cluster.yml

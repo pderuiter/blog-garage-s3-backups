@@ -1,0 +1,25 @@
+---
+# Endpoint the CronJobs upload to (Traefik + TLS in the post).
+garage_backup_url: https://backups.example.com
+garage_backup_region: garage
+garage_backup_ntfy_url: https://ntfy.example.com/backups
+
+# Credentials: "kubernetes" creates plain Secrets from the values below (the API key
+# is read from the garage host by default). "external-secrets" creates the post's
+# ExternalSecrets instead; the values must then already be in Vault.
+garage_backup_secret_source: kubernetes
+garage_backup_access_key_id: "{{ hostvars[groups['garage'][0]]['garage_access_key_id'] }}"
+garage_backup_secret_access_key: "{{ hostvars[groups['garage'][0]]['garage_secret_access_key'] }}"
+garage_backup_eso_store: vault-backend
+garage_backup_eso_garage_key: secret/kubernetes/garage-backup
+# Vault key per job for the DB password: "<prefix><job name>" with property "password".
+garage_backup_eso_db_key_prefix: secret/kubernetes/
+
+# [{name, schedule, bucket, db_host, db_user, db_name, db_password, namespace (default: name)}]
+garage_backup_jobs: []
+
+garage_backup_postgres_image: postgres:16.1
+garage_backup_alpine_image: alpine:3.21
+# The aws CLI is copied from this image into the job (the MinIO Client the post uses
+# is no longer downloadable).
+garage_backup_aws_cli_image: amazon/aws-cli:2.41.0

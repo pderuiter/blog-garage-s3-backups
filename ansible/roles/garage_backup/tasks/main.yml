@@ -1,0 +1,7 @@
+---
+- name: Configure each backup job
+  ansible.builtin.include_tasks: job.yml
+  loop: "{{ garage_backup_jobs }}"
+  loop_control:
+    loop_var: garage_backup_job
+    label: "{{ garage_backup_job.name }}"

@@ -1,0 +1,77 @@
+---
+# The post's "Testing a Backup Job": run the CronJob once, follow it to the end and
+# check that the dump landed in Garage. Run tests/demo-db.yml first if you have no
+# database of your own.
+#   ansible-playbook tests/verify.yml
+- name: Run the first backup job once
+  hosts: k8s
+  vars:
+    ansible_python_interpreter: "{{ k3s_python_venv }}/bin/python"
+    verify_job: "{{ garage_backup_jobs[0] }}"
+    verify_ns: "{{ garage_backup_jobs[0].namespace | default(garage_backup_jobs[0].name) }}"
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k3s_kubeconfig }}"
+  tasks:
+    - name: Remove an earlier test job
+      kubernetes.core.k8s:
+        api_version: batch/v1
+        kind: Job
+        name: "{{ verify_job.name }}-test"
+        namespace: "{{ verify_ns }}"
+        state: absent
+        delete_options: {propagationPolicy: Foreground}
+        wait: true
+
+    # kubectl create job --from=cronjob/gitlab-backup gitlab-backup-test -n gitlab-backup
+    - name: Create the test job from the CronJob
+      ansible.builtin.command: >-
+        /usr/local/bin/k3s kubectl create job --from=cronjob/{{ verify_job.name }}
+        {{ verify_job.name }}-test -n {{ verify_ns }}
+      changed_when: true
+
+    - name: Wait for the job to complete
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: Job
+        name: "{{ verify_job.name }}-test"
+        namespace: "{{ verify_ns }}"
+        wait: true
+        wait_condition: {type: Complete, status: "True"}
+        wait_timeout: 600
+
+    - name: Read the job log
+      ansible.builtin.command: /usr/local/bin/k3s kubectl logs -n {{ verify_ns }} job/{{ verify_job.name }}-test
+      register: verify_log
+      changed_when: false
+      failed_when: "'Backup completed successfully' not in verify_log.stdout"
+
+    - name: Show the log
+      ansible.builtin.debug:
+        msg: "{{ verify_log.stdout_lines }}"
+
+- name: Check the object in Garage
+  hosts: garage
+  vars:
+    verify_bucket: "{{ garage_backup_jobs[0].bucket }}"
+  tasks:
+    - name: Read the API key
+      ansible.builtin.command: docker exec garage /garage key info --show-secret backup-user
+      register: verify_key
+      changed_when: false
+      no_log: true
+
+    - name: List the backups
+      ansible.builtin.command: >-
+        docker run --rm --network {{ garage_traefik_network | default('traefik_network') }}
+        -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY amazon/aws-cli:2.41.0
+        --endpoint-url http://garage:3900 --region garage s3 ls s3://{{ verify_bucket }}/db/
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ verify_key.stdout | regex_search('Key ID: (\\S+)', '\\1') | first }}"
+        AWS_SECRET_ACCESS_KEY: "{{ verify_key.stdout | regex_search('Secret key: (\\S+)', '\\1') | first }}"
+      register: verify_ls
+      changed_when: false
+      failed_when: "'.sql.gz' not in verify_ls.stdout"
+
+    - name: Show them
+      ansible.builtin.debug:
+        msg: "{{ verify_ls.stdout_lines }}"

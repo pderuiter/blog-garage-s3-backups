@@ -1,0 +1,159 @@
+{% set ns = garage_backup_job.namespace | default(garage_backup_job.name) %}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ garage_backup_job.name }}
+  namespace: {{ ns }}
+spec:
+  schedule: "{{ garage_backup_job.schedule }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          restartPolicy: OnFailure
+          initContainers:
+            - name: download-tools
+              image: {{ garage_backup_alpine_image }}
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  apk add --no-cache ca-certificates wget > /dev/null 2>&1
+                  # Bundle wget with musl libs for ntfy notifications
+                  # (postgres:16.1 is Debian-based and has no HTTP client)
+                  cp /usr/bin/wget /tools/wget
+                  mkdir -p /tools/lib
+                  for lib in /lib/ld-musl-x86_64.so.1 \
+                             /usr/lib/libpcre2-8.so.0 \
+                             /usr/lib/libidn2.so.0 \
+                             /usr/lib/libssl.so.3 \
+                             /usr/lib/libcrypto.so.3 \
+                             /usr/lib/libz.so.1 \
+                             /usr/lib/libunistring.so.5; do
+                    cp "$lib" /tools/lib/
+                  done
+                  cp -a /etc/ssl/certs /tools/ssl-certs
+                  echo "wget and CA certificates prepared"
+              volumeMounts:
+                - name: tools
+                  mountPath: /tools
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+            # The aws CLI v2 is a self-contained glibc build; it runs as-is in the
+            # Debian-based postgres image.
+            - name: copy-aws-cli
+              image: {{ garage_backup_aws_cli_image }}
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  cp -a /usr/local/aws-cli/v2/current/dist /tools/aws-cli
+                  /tools/aws-cli/aws --version
+              volumeMounts:
+                - name: tools
+                  mountPath: /tools
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+          containers:
+            - name: backup
+              image: {{ garage_backup_postgres_image }}
+              command: ["bash", "-c"]
+              args:
+                - |
+                  set -eo pipefail
+                  DATE=$(date -u +%Y-%m-%dT%H%M%SZ)
+                  BUCKET="{{ garage_backup_job.bucket }}"
+                  GARAGE_URL="{{ garage_backup_url }}"
+                  NTFY_URL="{{ garage_backup_ntfy_url }}"
+                  JOB_NAME="{{ garage_backup_job.name }}"
+                  WGET="/tools/lib/ld-musl-x86_64.so.1 --library-path /tools/lib /tools/wget"
+                  CA_CERT="/tools/ssl-certs/ca-certificates.crt"
+
+                  # Send ntfy notification on failure
+                  notify_failure() {
+                    local exit_code=$?
+                    if [ $exit_code -ne 0 ]; then
+                      $WGET -qO /dev/null --ca-certificate="$CA_CERT" \
+                        --header="Title: Backup Failed: $JOB_NAME" \
+                        --header="Priority: high" \
+                        --header="Tags: rotating_light" \
+                        --post-data="$JOB_NAME failed at $DATE with exit code $exit_code" \
+                        "$NTFY_URL" 2>/dev/null || true
+                    fi
+                  }
+                  trap notify_failure EXIT
+
+                  # aws CLI against Garage: only send checksums when an operation requires them
+                  AWS="/tools/aws-cli/aws --endpoint-url $GARAGE_URL --region {{ garage_backup_region }}"
+
+                  # Verify bucket access
+                  $AWS s3api head-bucket --bucket "$BUCKET"
+                  echo "=== Garage S3 connection verified ==="
+
+                  # Dump and upload
+                  echo "=== Backing up PostgreSQL database ==="
+                  DUMP_FILE="/tmp/${JOB_NAME}-db-${DATE}.sql.gz"
+                  PGPASSWORD="$DB_PASSWORD" pg_dump \
+                    -h {{ garage_backup_job.db_host }} \
+                    -U {{ garage_backup_job.db_user }} -d {{ garage_backup_job.db_name }} \
+                    --no-owner --no-privileges | gzip > "$DUMP_FILE"
+
+                  SIZE=$(du -h "$DUMP_FILE" | cut -f1)
+                  echo "Database dump complete: $SIZE"
+
+                  $AWS s3 cp --no-progress "$DUMP_FILE" "s3://$BUCKET/db/${JOB_NAME}-db-${DATE}.sql.gz"
+                  echo "Uploaded to Garage"
+
+                  rm -f "$DUMP_FILE"
+                  echo "=== Backup completed successfully ==="
+              env:
+                - name: AWS_CA_BUNDLE
+                  value: /tools/ssl-certs/ca-certificates.crt
+                - name: AWS_REQUEST_CHECKSUM_CALCULATION
+                  value: when_required
+                - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+                  value: when_required
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: garage-credentials
+                      key: ACCESS_KEY
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: garage-credentials
+                      key: SECRET_KEY
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ garage_backup_job.name | regex_replace('-backup$', '') }}-db-password
+                      key: password
+              volumeMounts:
+                - name: tools
+                  mountPath: /tools
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+          volumes:
+            - name: tools
+              emptyDir: {}

@@ -1,0 +1,7 @@
+---
+# cp vault.yml.example vault.yml && ansible-vault encrypt vault.yml
+# Both: openssl rand -hex 32
+vault_garage_rpc_secret: 0000000000000000000000000000000000000000000000000000000000000000
+vault_garage_admin_token: 0000000000000000000000000000000000000000000000000000000000000000
+# Password of the database the gitlab-backup CronJob dumps.
+vault_gitlab_db_password: change-me

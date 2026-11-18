@@ -1,0 +1,33 @@
+---
+- name: Garage S3 on Docker (Part 1)
+  hosts: garage
+  pre_tasks:
+    - name: Refresh the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['os_family'] == 'Debian'
+  roles:
+    - role: docker_engine
+    - role: garage
+
+- name: Single-node k3s cluster
+  hosts: k8s
+  pre_tasks:
+    - name: Refresh the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['os_family'] == 'Debian'
+  roles:
+    - role: k3s
+
+- name: Backup CronJobs (Part 2)
+  hosts: k8s
+  vars:
+    # kubernetes.core needs a newer kubernetes client than Ubuntu ships (see the k3s role).
+    ansible_python_interpreter: "{{ k3s_python_venv }}/bin/python"
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ k3s_kubeconfig }}"
+  roles:
+    - role: garage_backup

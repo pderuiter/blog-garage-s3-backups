@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+replication_factor = 1
+
+rpc_bind_addr = "0.0.0.0:3901"
+rpc_secret = "{{ garage_rpc_secret }}"
+
+[s3_api]
+api_bind_addr = "0.0.0.0:3900"
+s3_region = "{{ garage_s3_region }}"
+root_domain = "{{ garage_s3_root_domain }}"
+
+[s3_web]
+bind_addr = "0.0.0.0:3902"
+root_domain = "{{ garage_web_root_domain }}"
+
+[admin]
+api_bind_addr = "0.0.0.0:3903"
+admin_token_file = "/var/lib/garage/admin_token"

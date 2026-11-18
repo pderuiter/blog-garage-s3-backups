@@ -1,0 +1,29 @@
+---
+# Values from the post. Secrets live in vault.yml (see vault.yml.example).
+garage_rpc_secret: "{{ vault_garage_rpc_secret }}"
+garage_admin_token: "{{ vault_garage_admin_token }}"
+garage_host: backups.example.com
+garage_data_dir: /data-pool/backups
+garage_buckets:
+  - name: gitlab-backup
+    expire_days: 15
+  - name: keycloak-backup
+    expire_days: 15
+  - name: sonarqube-backup
+    expire_days: 15
+
+# How the CronJobs reach Garage: through Traefik with TLS, as in the post.
+garage_backup_url: "https://{{ garage_host }}"
+garage_backup_ntfy_url: https://ntfy.example.com/backups
+garage_backup_jobs:
+  - name: gitlab-backup
+    schedule: "0 3 * * *"
+    bucket: gitlab-backup
+    db_host: gitlab-postgres.gitlab.svc
+    db_user: gitlab
+    db_name: gitlab
+    db_password: "{{ vault_gitlab_db_password }}"
+
+# Shared by the k3s role and the plays that talk to the cluster.
+k3s_kubeconfig: /etc/rancher/k3s/k3s.yaml
+k3s_python_venv: /opt/ansible-k8s

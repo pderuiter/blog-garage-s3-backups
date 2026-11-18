@@ -1,0 +1,65 @@
+---
+- name: Read the node status
+  ansible.builtin.command: docker exec {{ garage_container_name }} /garage status
+  register: garage_status
+  changed_when: false
+  retries: 10
+  delay: 3
+  until: garage_status.rc == 0
+
+- name: Assign and apply the storage role
+  when: "'NO ROLE ASSIGNED' in garage_status.stdout"
+  block:
+    - name: Read the node ID
+      ansible.builtin.command: docker exec {{ garage_container_name }} /garage node id -q
+      register: garage_node_id
+      changed_when: false
+
+    - name: Assign the storage role
+      ansible.builtin.command: >-
+        docker exec {{ garage_container_name }} /garage layout assign
+        -z {{ garage_layout_zone }} -c {{ garage_layout_capacity }} {{ garage_node_id.stdout.split('@')[0] }}
+      changed_when: true
+
+    - name: Read the current layout version
+      ansible.builtin.command: docker exec {{ garage_container_name }} /garage layout show
+      register: garage_layout
+      changed_when: false
+
+    - name: Apply the layout
+      ansible.builtin.command: >-
+        docker exec {{ garage_container_name }} /garage layout apply
+        --version {{ (garage_layout.stdout | regex_search('Current cluster layout version: ([0-9]+)', '\1') | first | int) + 1 }}
+      changed_when: true
+
+- name: Check for the API key
+  ansible.builtin.command: docker exec {{ garage_container_name }} /garage key info {{ garage_key_name }}
+  register: garage_key_check
+  changed_when: false
+  failed_when: false
+
+- name: Create the API key
+  ansible.builtin.command: docker exec {{ garage_container_name }} /garage key create {{ garage_key_name }}
+  when: garage_key_check.rc != 0
+  changed_when: true
+  no_log: true
+
+- name: Read the API key
+  ansible.builtin.command: docker exec {{ garage_container_name }} /garage key info --show-secret {{ garage_key_name }}
+  register: garage_key_info
+  changed_when: false
+  no_log: true
+
+# Used by the garage_backup role for the Kubernetes secret.
+- name: Remember the access key and secret
+  ansible.builtin.set_fact:
+    garage_access_key_id: "{{ garage_key_info.stdout | regex_search('Key ID: (\\S+)', '\\1') | first }}"
+    garage_secret_access_key: "{{ garage_key_info.stdout | regex_search('Secret key: (\\S+)', '\\1') | first }}"
+  no_log: true
+
+- name: Configure each bucket
+  ansible.builtin.include_tasks: bucket.yml
+  loop: "{{ garage_buckets }}"
+  loop_control:
+    loop_var: garage_bucket
+    label: "{{ garage_bucket.name }}"

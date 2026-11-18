@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: garage
+  author: Patrick de Ruiter
+  description: Single-node Garage S3 on Docker Compose behind Traefik, with a key, buckets and lifecycle expiration
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+dependencies: []
